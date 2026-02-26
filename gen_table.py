@@ -1,32 +1,38 @@
 #!/usr/bin/env python3
 """
-根据chinese_calendar库生成Go语言的节假日数据表
+根据 chinese_calendar 库生成 Go 语言的节假日数据表
+参考 FastClassSchedule/utils/calc.py 中的逻辑
 """
 import datetime
 import chinese_calendar
 
-def get_compensation_pairs(year):
-    mapping = {}
+
+def _holiday_to_workday_map(year):
+    """
+    构建指定年份的映射：调休休息日(holiday 且 in_lieu) -> 对应补班日(workday)。
+    规则：按 detail 归组；组内分别对"调休休息日"和"补班日"排序后按序配对；zip 最短长度保证稳健。
+    """
+    # detail -> list[workday]
     detail_to_workdays = {}
     for d, detail in chinese_calendar.workdays.items():
         if d.year == year:
-            if detail not in detail_to_workdays:
-                detail_to_workdays[detail] = []
-            detail_to_workdays[detail].append(d)
-    
+            detail_to_workdays.setdefault(detail, []).append(d)
+
+    # detail -> list[in-lieu holiday]
     detail_to_holidays = {}
     for d, detail in chinese_calendar.holidays.items():
         if d.year == year and chinese_calendar.is_in_lieu(d):
-            if detail not in detail_to_holidays:
-                detail_to_holidays[detail] = []
-            detail_to_holidays[detail].append(d)
-    
+            detail_to_holidays.setdefault(detail, []).append(d)
+
+    mapping = {}
     for detail, holidays in detail_to_holidays.items():
         workdays = detail_to_workdays.get(detail, [])
-        if workdays:
-            for h, w in zip(sorted(holidays), sorted(workdays)):
-                mapping[h] = w
+        if not workdays:
+            continue
+        for h, w in zip(sorted(holidays), sorted(workdays)):
+            mapping[h] = w
     return mapping
+
 
 def generate_go_code():
     lines = []
@@ -38,40 +44,39 @@ def generate_go_code():
     # 节假日数据表
     lines.append("// 节假日数据表")
     lines.append("var holidayTable = map[string]bool{")
-    for year in range(2004, datetime.datetime.now().year):
+    for year in range(2004, datetime.datetime.now().year + 1):
         start_date = datetime.date(year, 1, 1)
         end_date = datetime.date(year, 12, 31)
         current_date = start_date
         while current_date <= end_date:
-            is_holiday = chinese_calendar.is_holiday(current_date)
-            if is_holiday:
+            if chinese_calendar.is_holiday(current_date):
                 date_str = current_date.strftime("%Y-%m-%d")
                 lines.append(f'    "{date_str}": true,')
             current_date += datetime.timedelta(days=1)
     lines.append("}")
     lines.append("")
     
-    # 调休标记表
-    lines.append("// 调休标记表")
+    # 调休休息日标记表
+    lines.append("// 调休休息日标记表 (调休产生的休息日、处于调休链条中的日期)")
     lines.append("var inLieuTable = map[string]bool{")
-    for year in range(2004, datetime.datetime.now().year):
+    for year in range(2004, datetime.datetime.now().year + 1):
         start_date = datetime.date(year, 1, 1)
         end_date = datetime.date(year, 12, 31)
         current_date = start_date
         while current_date <= end_date:
-            if current_date in chinese_calendar.in_lieu_days:
+            if chinese_calendar.is_in_lieu(current_date):
                 date_str = current_date.strftime("%Y-%m-%d")
                 lines.append(f'    "{date_str}": true,')
             current_date += datetime.timedelta(days=1)
     lines.append("}")
     lines.append("")
     
-    # 调休配对表
-    lines.append("// 调休配对表")
+    # 调休配对表：调休休息日 -> 对应的补班日
+    lines.append("// 调休配对表：调休休息日 -> 补班日")
     lines.append("var compensationTable = map[string]string{")
-    for year in range(2004, datetime.datetime.now().year):
-        pairs = get_compensation_pairs(year)
-        for holiday_date, workday_date in pairs.items():
+    for year in range(2004, datetime.datetime.now().year + 1):
+        pairs = _holiday_to_workday_map(year)
+        for holiday_date, workday_date in sorted(pairs.items()):
             holiday_str = holiday_date.strftime("%Y-%m-%d")
             workday_str = workday_date.strftime("%Y-%m-%d")
             lines.append(f'    "{holiday_str}": "{workday_str}",')
@@ -80,8 +85,9 @@ def generate_go_code():
     
     return "\n".join(lines)
 
+
 if __name__ == "__main__":
-    print("正在生成Go节假日数据表...")
+    print("正在生成 Go 节假日数据表...")
     go_code = generate_go_code()
     with open("model.go", "w", encoding="utf-8") as f:
         f.write(go_code)
